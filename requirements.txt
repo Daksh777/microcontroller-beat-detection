@@ -1,0 +1,9 @@
+# Version ranges, not exact pins: the exact versions of the original run were not recorded in the repo (see README).
+numpy>=1.26
+scipy>=1.11
+scikit-learn>=1.3
+tensorflow>=2.15
+wfdb>=4.1
+matplotlib>=3.8
+# only for code/quant_causal.py (TFLite Micro host check, Python wrapper of the TFLM interpreter)
+tflite-micro

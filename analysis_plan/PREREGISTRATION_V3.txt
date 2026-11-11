@@ -1,0 +1,73 @@
+PRE-REGISTRATION, paper v3 (written 2026-10-21, BEFORE any v3 run; no v3 DS2 result exists at time of writing)
+
+Goal: test whether label-free, causal, per-patient class-prior (label-shift) correction improves inter-patient
+heartbeat classification of the fixed 924-parameter CNN+RR model (architecture/width/recipe frozen from v2 CV).
+
+Calibration (fitted on the patient-wise validation records only, never on scored records):
+  Bias-corrected temperature scaling (BCTS, Alexandari et al. 2020): q = softmax(z/T + b), (T, b) minimise NLL
+  on the validation beats. Source prior pi_s = class frequencies of those validation beats.
+
+Adaptation methods (all label-free, evaluated per record, then pooled):
+  M0  argmax of the raw softmax (v2 baseline)
+  M1  BCTS only (no prior correction)
+  M2  streaming EM (proposed): pi_0 = pi_s; for beat t, p_t = normalise(q_t * pi_{t-1} / pi_s); decision = argmax p_t;
+      then pi_t = (1-lam) pi_{t-1} + lam p_t, floored at 1e-4 and renormalised. Uses only past and current beats.
+  M3  offline EM per record (Saerens et al. 2002, uses the whole unlabeled record; non-causal reference)
+  M4  oracle prior (true per-record class frequencies; upper bound, uses labels; reference only)
+
+Choice of lam (the only free parameter), on DS1 only:
+  4 folds (the v2 folds). For held-out fold k: validation (checkpoint + BCTS) = fold (k+1) mod 4; train = other two folds.
+  Seeds 42 and 1 -> 8 cells. Score per cell = mean(F1_S, F1_V) on fold k, pooled over its records, method M2.
+  Candidates lam in {1/50, 1/100, 1/200, 1/400, 1/800}.
+  Rule: take the best mean score; choose the SMALLEST lam (slowest adaptation) whose mean is within one SE of the best.
+  Adaptation is adopted as the primary result only if M2 with the chosen lam beats M0 in paired DS1 CV by more than one
+  paired SE; otherwise it is reported as a negative result and M0 remains primary.
+
+Real-time front end (secondary, also frozen before running):
+  causal 4th-order Butterworth 0.5-45 Hz (sosfilt, one pass) + causal 60 Hz notch (Q=30) [MIT-BIH is US-recorded];
+  causal Pan-Tompkins-style R-peak detector; a detection matches an annotation if within 150 ms (AAMI EC57).
+  Beat labels come from the matched annotation; unmatched detections are counted as false detections and excluded
+  from classification metrics; missed beats are reported and counted as misses in end-to-end sensitivity.
+  Model retrained on DS1 with this front end (same recipe, 5 seeds 42,1,2,3,4), lam carried over unchanged.
+
+Split-variance study (secondary): 20 random patient-wise splits of the 44 non-paced records (22 train incl. 5 val / 22 test),
+  split seeds 0..19, one training seed each, front end = annotation R-peaks + original v2 preprocessing.
+  Reported: distribution of test S/V metrics for M0 and M2; fraction of splits where M2 beats M0.
+
+OUTCOME OF THE PRE-REGISTERED DS1 CV (appended 2026-10-21, before any DS2 adaptation result was computed or viewed):
+  M0 0.524+-0.038 | M1 (BCTS only) 0.460 | M2 best lam=1/50 0.509; rule-chosen lam=1/800 0.496 | M3 0.521 | M4 oracle 0.614.
+  M2 does not beat M0 by > 1 paired SE (diff -0.029, SE 0.036, 3/8 wins) -> pre-registered method NOT adopted.
+  Diagnosis: argmax of calibrated posteriors (M1) loses the minority-favouring decision bias that class-weighted training
+  builds into the raw softmax; M2 inherits that loss.
+
+AMENDMENT A1 (post hoc, written after the DS1 CV outcome above, before any DS2 adaptation result):
+  "Cost-preserving" variants: the prior pi_t is estimated exactly as in M2/M3/M4 (EM on BCTS-calibrated posteriors), but the
+  decision is argmax_k softmax(z)_k * pi_t,k / pi_s,k, i.e. the raw model's decision rule with only the label-shift ratio
+  applied (reduces exactly to M0 when pi_t = pi_s).  Named M2c (streaming, causal; uses pi_{t-1}), M3c (offline EM), M4c (oracle).
+  lam for M2c chosen on the same DS1 CV cells with the same rule (smallest lam within 1 SE of best), same adoption criterion
+  (beat M0 by > 1 paired SE).  Because A1 was designed after seeing DS1 CV results, the paper will label it as post hoc and
+  report both the failed pre-registered M2 and A1 on DS2.
+
+OUTCOME OF A1 ON DS1 CV: M2c best/chosen lam=1/800, 0.497, diff vs M0 -0.027 (SE 0.020), 3/8 wins -> NOT adopted.
+  Cost-preserving oracle M4c 0.490 < M0. Calibrated oracle M4 0.614 remains the only variant above M0.
+  Conclusion: no further label-free variants will be tried (to avoid a garden of forking paths). The paper is re-framed as an
+  analysis of what limits S detection in tiny inter-patient models; M2 and M2c are reported on DS2 as negative results.
+
+ADDENDUM A2 (quantification only, no selection; written before any DS2 adaptation result):
+  M5k: per-record prior estimated from the LABELS of the first k minutes of the record (k = 2, 5), floored at 1e-4,
+  decision = BCTS-calibrated posterior * pi_k / pi_s (as M4). Scored only on beats after minute k; M0 and M4 re-scored on the
+  same beats for a paired comparison. Diagnostic D1: per-record |offline-EM S prior - true S prior| vs oracle.
+
+OUTCOME OF A2 ON DS1 CV: M5 (first 2 or 5 min of labels) does not beat M0 (-0.028, 3/8 wins). Oracle M4 gain is driven by S PPV
+  (0.37 -> 0.72) on S-free records; EM drives S prior to ~0 on S-free records (median 1e-4) but strongly under-estimates it on
+  S-rich records (207: 0.058 true vs <=0.002; 209: 0.127 vs 0.011-0.031); corr(true, EM) = 0.30 for S vs 0.80 for V.
+
+ADDENDUM A3 (written before any DS2 ensemble or adaptation result was viewed): seed ensembles, no tuning.
+  E5 = mean of the softmax outputs of 5 independently trained 924-parameter models; two disjoint ensembles per front end:
+  seeds {42,1,2,3,4} and {5,6,7,8,9}. Compared with the 10 single models. Also reported: E5 + M2 (pre-registered lam).
+
+OUTCOME ON DS2 (9 of 10 seeds available, seed 42 pending): M2 0.707 vs M0 0.716 (not better); M2c, M3 worse; oracle M4 0.844;
+  M5 (2 or 5 min labels) 0.848/0.853 vs M0 0.710/0.704 on the same late beats, 9/9 wins - opposite sign to DS1 CV (-0.028).
+ADDENDUM A4 (written before any random-split result was computed or viewed): because the M5 result differs in sign between
+  DS1 CV and DS2, M5_2 and M5_5 are added to the 20-split analysis (paired with M0 on the same beats after minute k).
+  This split-level result, not DS2, is what the paper will treat as evidence on whether few-label prior correction helps.
